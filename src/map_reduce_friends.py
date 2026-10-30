@@ -70,7 +70,8 @@ def get_friend_recommendations(df, random_subset):
       .map(lambda kv: (kv[0], list(f for f, v in kv[1])))
       .toDF(["UserId", "RecommendedIds"]))
 
-    # Preview
-    print(top_10_recommendations.collect())
+    # Output format: UserID<TAB>rec1,rec2,...
+    for row in top_10_recommendations.orderBy("UserId").collect():
+        print(f"{row['UserId']}\t{','.join(str(r) for r in row['RecommendedIds'])}")
     return top_10_recommendations
 
