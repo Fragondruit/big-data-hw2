@@ -1,7 +1,7 @@
 # from pyspark import SparkConf, SparkContext
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, LongType, ArrayType
-from pyspark.sql.functions import col, split, explode, rand, flatten, collect_list, array_except, array_union, array
+from pyspark.sql.functions import col, split, coalesce, rand, array, when
 
 def load_friend_network():
     FNAME = "../dataset/soc-LiveJournal1Adj.txt"
@@ -17,13 +17,15 @@ def load_friend_network():
     # then, parse and re-alias the second column
     df_parsed = df.select(
         col("UserId").cast("long"),
-        split(col("FriendsRaw"), ",").cast("array<long>").alias("FriendIds"),
+        coalesce(
+            when(col("FriendsRaw").isNotNull() & (col("FriendsRaw") != ""),
+                 split(col("FriendsRaw"), ",").cast("array<long>")),
+            array().cast("array<long>")
+        ).alias("FriendIds")
     )
 
     return df_parsed
 
-def transform_df_to_triples(df):
-    ...
 
 def get_friend_recommendations(df, random_subset):
     # use RDD API to map-reduce
@@ -93,13 +95,15 @@ def test():
 
     # Create full df
     df = spark.createDataFrame(data, schema=schema)
-    random_subset = df.orderBy(rand()).limit(10)
-    get_friend_recommendations(df, random_subset)
+    als_df = transform_df_to_triples(df)
+    # random_subset = df.orderBy(rand()).limit(10)
+    # get_friend_recommendations(df, random_subset)
 
 def main() -> None:
     df = load_friend_network()
+    als_df = transform_df_to_triples(df)
     random_subset = df.orderBy(rand()).limit(10)
-    get_friend_recommendations(df, random_subset)
+    # get_friend_recommendations(df, random_subset)
 
 if __name__ == "__main__":
     # Initialize a SparkSession
