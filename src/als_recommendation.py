@@ -5,7 +5,8 @@ from pyspark.ml.recommendation import ALS, ALSModel
 from pyspark.ml.tuning import ParamGridBuilder, CrossValidator, CrossValidatorModel
 from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.sql import DataFrame
-
+from spark_init import sc, spark
+import joblib
 
 class FriendRecommenderALS:
     """
@@ -14,6 +15,7 @@ class FriendRecommenderALS:
 
     INIT_SEED: int = 20
     METRIC: str = "rmse"
+    PICKLE_PATH: str = "../cache/best_model_weights.pkl"
 
     def __init__(
             self,
@@ -32,7 +34,7 @@ class FriendRecommenderALS:
         self.cv_model: CrossValidatorModel = None
         self.best_model: PipelineModel = None
         self.evaluator = RegressionEvaluator(
-            metricName=METRIC,
+            metricName=FriendRecommenderALS.METRIC,
             labelCol=self.rating_col,
             predictionCol="prediction"
         )
@@ -73,8 +75,6 @@ class FriendRecommenderALS:
         Runs cross-validation across the hyperparameter grid and identifies the best model.
         """
         als_stage = self.pipeline.getStages()[-1]
-
-        # 3. ParamGridBuilder varying rank, regParam, and maxIter
         param_grid = (
             ParamGridBuilder()
             .addGrid(als_stage.rank, ranks)
@@ -83,7 +83,7 @@ class FriendRecommenderALS:
             .build()
         )
 
-        # 4. CrossValidator with evaluator
+        # CrossValidator with evaluator
         cv = CrossValidator(
             estimator=self.pipeline,
             estimatorParamMaps=param_grid,
@@ -93,19 +93,28 @@ class FriendRecommenderALS:
             parallelism=parallelism
         )
 
-        # Execute tuning
+        # train and get best
         self.cv_model = cv.fit(train_df)
         self.best_model = self.cv_model.bestModel
-
+        joblib.dump(best_model, '../cache/best_model_weights.pkl')
         return self.get_best_params()
 
     def get_best_params(self) -> Dict[str, Any]:
         """Extracts the winning hyperparameters from the best ALS stage."""
         best_als: ALSModel = self.best_model.stages[-1]
+        param_map = best_als.extractParamMap()
+
+        # TODO: use a named object here?
+        print({
+            "Rank": best_als.rank,
+            "RegParam": [0.01, 0.1],
+            "MaxIter": [5, 10]
+        })
+
         return {
-            "Rank": best_als.getRank(),
-            "RegParam": best_als.getRegParam(),
-            "MaxIter": best_als.getMaxIter()
+            "Rank": best_als.rank,
+            "RegParam": [0.01, 0.1],
+            "MaxIter": [5, 10]
         }
 
     def predict(self, df: DataFrame) -> DataFrame:
@@ -140,3 +149,32 @@ class FriendRecommenderALS:
         pair_df = rdd.toDF(["User", "OtherUser", "IsFriend"])
         print(pair_df.show(15, truncate=False))
         return pair_df
+
+def get_als_recommendations(df: DataFrame) -> None:
+    """ Free utility to do it all. """
+    als_df = FriendRecommenderALS.transform_df_to_triples(df)
+    recommender = FriendRecommenderALS()
+    train_df, test_df = als_df.randomSplit([0.8, 0.2])
+
+    print("[Step 1] Randomly split data.")
+
+    best_params = recommender.tune_and_fit(train_df=train_df)
+
+    print("[Step 2] Optimal Hyperparameters:", best_params)
+
+    test_rmse = recommender.evaluate(test_df)
+    print(f"Test RMSE: {test_rmse:.4f}")
+
+    random_subset = (
+        test_df.select(col(self.user_col))
+        .distinct()
+        .orderBy(rand())
+        .limit(num_users)
+    )
+
+    print("[Step 3] Running on random subset of users...")
+
+    predictions = recommender.predict(random_subset)
+    predictions.select("User", "OtherUser", "IsFriend", "prediction").show(10)
+
+
